@@ -216,6 +216,14 @@ body{
 #cr-url{font-size:12px}
 .modal .btn.wide{align-self:center}
 
+#cr-out[hidden]{display:none}
+.photo-box{display:flex;flex-direction:column;gap:8px;font-size:12.5px;color:rgba(255,255,255,.7)}
+.drop{display:flex;align-items:center;justify-content:center;gap:8px;padding:16px;border:1.5px dashed rgba(255,255,255,.4);border-radius:14px;background:rgba(255,255,255,.05);color:#fff;font:500 14px 'Fredoka',sans-serif;cursor:pointer;text-align:center}
+.thumbs{display:flex;flex-wrap:wrap;gap:8px}
+.thumb{position:relative;width:62px;height:62px;border-radius:10px;overflow:hidden}
+.thumb img{width:100%;height:100%;object-fit:cover}
+.thumb button{position:absolute;top:2px;right:2px;width:20px;height:20px;border-radius:50%;border:0;background:rgba(0,0,0,.65);color:#fff;font-size:10px;cursor:pointer}
+
 </style>
 </head>
 <body>
@@ -481,6 +489,31 @@ Happy birthday, my favourite person 🥹
   }
   const next = () => go(order[Math.min(cur + 1, order.length - 1)]);
 
+  /* ---------- shared photo storage (used by memory lane + creator) ---------- */
+  const PH_KEY = 'bday_photos_v1';
+  function loadPhotos() {
+    let s = null;
+    try { s = JSON.parse(localStorage.getItem(PH_KEY) || 'null'); } catch (e) {}
+    return s && s.length ? s : (C.memories.photos || []).map(p => ({ src: p.src, caption: p.caption || '' }));
+  }
+  function savePhotos(list) {
+    try { localStorage.setItem(PH_KEY, JSON.stringify(list)); }
+    catch (e) { alert('Storage is full — remove a few photos.'); }
+  }
+  const shrink = file => new Promise(res => {
+    const r = new FileReader();
+    r.onload = () => {
+      const im = new Image();
+      im.onload = () => {
+        const k = Math.min(1, 900 / Math.max(im.width, im.height)), c = document.createElement('canvas');
+        c.width = im.width * k; c.height = im.height * k; c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
+        res(c.toDataURL('image/jpeg', .8));
+      };
+      im.onerror = () => res(null); im.src = r.result;
+    };
+    r.readAsDataURL(file);
+  });
+
   /* ---------- "make your own" creator ---------- */
   function openCreator() {
     const m = document.createElement('div');
@@ -492,6 +525,12 @@ Happy birthday, my favourite person 🥹
       <label>Age they're turning<input id="cr-age" type="number" min="1" max="120" value="${escRaw(V.age)}"></label>
       <label>Your letter<textarea id="cr-letter" rows="6" maxlength="1500">${escRaw(C.letter.body)}</textarea></label>
       <label>Reasons they're loved (one per line, up to 8)<textarea id="cr-reasons" rows="6">${escRaw(C.balloons.reasons.join('\n'))}</textarea></label>
+      <div class="photo-box">
+        <span class="lbl">Photos for the memory lane (optional)</span>
+        <label class="drop">📷 Tap to add photos<input type="file" id="cr-files" accept="image/*" multiple hidden></label>
+        <div class="thumbs" id="cr-thumbs"></div>
+        <p class="tiny">Saved on this device only — they show on the page you open here, not inside a shared link.</p>
+      </div>
       <button class="btn wide" id="cr-make">Create link 🔗</button>
       <div id="cr-out" hidden>
         <input id="cr-url" readonly>
@@ -500,11 +539,20 @@ Happy birthday, my favourite person 🥹
           <button class="upload-btn" id="cr-share">Share</button>
           <button class="upload-btn" id="cr-prev">Preview</button>
         </div>
-        <p class="tiny">Photos you add stay on your own device, so they won't travel in the link.</p>
       </div>
       <button class="clear-btn" id="cr-close">close</button>`;
     app.appendChild(m);
     const g = id => $('#' + id, m);
+    let pics = loadPhotos();
+    const drawThumbs = () => {
+      g('cr-thumbs').innerHTML = pics.map((p, i) => `<div class="thumb"><img src="${escRaw(p.src)}" alt=""><button data-rm="${i}" aria-label="Remove">✕</button></div>`).join('');
+      $$('[data-rm]', m).forEach(b => b.onclick = () => { pics.splice(+b.dataset.rm, 1); savePhotos(pics); drawThumbs(); });
+    };
+    drawThumbs();
+    g('cr-files').onchange = async e => {
+      for (const f of [...e.target.files].slice(0, 12)) { const src = await shrink(f); if (src) pics.push({ src, caption: '' }); }
+      savePhotos(pics); drawThumbs(); e.target.value = '';
+    };
     g('cr-close').onclick = () => m.remove();
     g('cr-make').onclick = () => {
       const data = {
@@ -614,11 +662,9 @@ Happy birthday, my favourite person 🥹
   };
 
   S.memories = el => {
-    const m = C.memories, KEY = 'bday_photos_v1';
-    let saved = null;
-    try { saved = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) {}
-    let photos = saved && saved.length ? saved : (m.photos || []).map(p => ({ src: p.src, caption: p.caption || '' }));
-    const save = () => { try { localStorage.setItem(KEY, JSON.stringify(photos)); } catch (e) { alert('Storage is full — remove a few photos.'); } };
+    const m = C.memories;
+    let photos = loadPhotos();
+    const save = () => savePhotos(photos);
     el.innerHTML = `
       <div class="lights">${'<i></i>'.repeat(14)}</div>
       <h2 class="title">${esc(m.title)}</h2>
@@ -658,20 +704,6 @@ Happy birthday, my favourite person 🥹
       const first = track.firstElementChild, w = first ? first.offsetWidth + 16 : 1;
       track.scrollTo({ left: Math.round(track.scrollLeft / w) * w, behavior: 'smooth' });
       setTimeout(() => track.style.scrollSnapType = '', 350);
-    });
-    /* resize big photos so they fit in browser storage */
-    const shrink = file => new Promise(res => {
-      const r = new FileReader();
-      r.onload = () => {
-        const im = new Image();
-        im.onload = () => {
-          const k = Math.min(1, 900 / Math.max(im.width, im.height)), c = document.createElement('canvas');
-          c.width = im.width * k; c.height = im.height * k; c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
-          res(c.toDataURL('image/jpeg', .8));
-        };
-        im.onerror = () => res(null); im.src = r.result;
-      };
-      r.readAsDataURL(file);
     });
     $('#filePick', el).onchange = async e => {
       for (const f of [...e.target.files].slice(0, 12)) { const src = await shrink(f); if (src) photos.push({ src, caption: '' }); }
